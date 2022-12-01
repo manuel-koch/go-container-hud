@@ -14,6 +14,13 @@ import (
 )
 
 var (
+	// these vars will be set on build time
+	versionTag  string
+	versionSha1 string
+	buildDate   string
+)
+
+var (
 	wnd                *giu.MasterWindow = nil
 	windowTitle                          = "Container HUD"
 	containerInfo                        = make(map[string]*ContainerInfo, 0)
@@ -231,6 +238,8 @@ func loop() {
 }
 
 func main() {
+	fmt.Printf("%s ( v%s, built %s, commit sha1 %s )\n\n", windowTitle, versionTag, buildDate, versionSha1)
+
 	if err := clipboard.Init(); err != nil {
 		panic(fmt.Errorf("Unable to use clipboard: %v", err))
 	}
