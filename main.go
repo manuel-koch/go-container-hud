@@ -237,7 +237,7 @@ func sendContainerDataToApp() {
 }
 
 func main() {
-	buildInfo := fmt.Sprintf("v%s, built %s, commit sha1 %s\n\n", versionTag, buildDate, versionSha1)
+	buildInfo := fmt.Sprintf("v%s\nbuilt %s\ncommit sha1 %s", versionTag, buildDate, versionSha1)
 	fmt.Println(buildInfo)
 
 	if err := clipboard.Init(); err != nil {
