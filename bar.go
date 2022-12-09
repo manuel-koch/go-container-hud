@@ -18,6 +18,7 @@ type BarWidget struct {
 	min        float64
 	value      float64
 	max        float64
+	label      string
 }
 
 // Bar creates BarWidget.
@@ -75,6 +76,12 @@ func (w *BarWidget) Background(color color.RGBA) *BarWidget {
 	return w
 }
 
+// Label Set label of widget
+func (w *BarWidget) Label(label string) *BarWidget {
+	w.label = label
+	return w
+}
+
 // Build implements Widget interface.
 func (w *BarWidget) Build() {
 	availWidth, availHeight := giu.GetAvailableRegion()
@@ -107,6 +114,9 @@ func (w *BarWidget) Build() {
 			w.foreground,
 		)
 	}
+
+	_, valueHeight := giu.CalcTextSize(w.label)
+	canvas.AddText(topLeftPos.Add(image.Pt(0, int(valueHeight/4))), color.White, w.label)
 
 	giu.Dummy(width, height).Build()
 }
