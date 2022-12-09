@@ -6,6 +6,7 @@ build_macos_binary::
 	go build -ldflags "-s -w -X main.versionTag=$(HEAD_TAG) -X main.versionSha1=$(HEAD_SHA1) -X main.buildDate=$(NOW)" -o build/container-hud .
 
 build_macos_app:: build_macos_binary
+	-[ -d container-hud.app ] && rm -rf container-hud.app
 	fyne package -os darwin -icon Icon.png --name container-hud --executable build/container-hud
 
 build:: build_macos_app
