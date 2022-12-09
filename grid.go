@@ -45,9 +45,6 @@ func GridBuilder[T any](id string, columns int, rows int, values []T, builder fu
 			if i >= columns*rows {
 				break
 			}
-			//if i%columns > 0 {
-			//	layout = append(layout, giu.Custom(func() { giu.SameLine() }))
-			//}
 			valueRef := v
 			layout = append(layout, giu.Custom(func() {
 				_ = foo
