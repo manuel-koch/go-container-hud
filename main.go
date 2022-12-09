@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/AllenDang/giu"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"golang.design/x/clipboard"
@@ -21,10 +20,9 @@ var (
 )
 
 var (
-	wnd                *giu.MasterWindow = nil
-	windowTitle                          = "Container HUD"
-	containerInfo                        = make(map[string]*ContainerInfo, 0)
-	containerInfoMutex                   = sync.RWMutex{}
+	app                *App = nil
+	containerInfo           = make(map[string]*ContainerInfo, 0)
+	containerInfoMutex      = sync.RWMutex{}
 )
 
 func getDockerStats(ctx context.Context) chan bool {
@@ -222,23 +220,25 @@ func stopContainer(id string) {
 	}
 }
 
-func loop() {
+func sendContainerDataToApp() {
 	containerInfoMutex.RLock()
-	infos := make([]ContainerData, len(containerInfo))
+	defer containerInfoMutex.RUnlock()
+
+	data := make([]ContainerData, len(containerInfo))
 	i := 0
-	for k := range containerInfo {
-		containerInfo[k].mutex.RLock()
-		infos[i] = containerInfo[k].Data
-		containerInfo[k].mutex.RUnlock()
+	for _, info := range containerInfo {
+		info.mutex.RLock()
+		data[i] = info.Data
+		info.mutex.RUnlock()
 		i++
 	}
-	containerInfoMutex.RUnlock()
 
-	showContainerInfos(infos, stopContainer, restartContainer)
+	app.ContainerData(data)
 }
 
 func main() {
-	fmt.Printf("%s ( v%s, built %s, commit sha1 %s )\n\n", windowTitle, versionTag, buildDate, versionSha1)
+	buildInfo := fmt.Sprintf("v%s, built %s, commit sha1 %s\n\n", versionTag, buildDate, versionSha1)
+	fmt.Println(buildInfo)
 
 	if err := clipboard.Init(); err != nil {
 		panic(fmt.Errorf("Unable to use clipboard: %v", err))
@@ -247,25 +247,23 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	getDockerStatsWithRetry(ctx)
 
-	wnd = giu.NewMasterWindow(windowTitle, 600, 600, 0)
-
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		loadResources()
-	}()
+	app = NewApp()
+	app.BuildInfo(buildInfo)
+	app.OnStopContainer(stopContainer)
+	app.OnRestartContainer(restartContainer)
 
 	go func() {
 		for {
 			select {
 			case <-time.After(1 * time.Second):
-				giu.Update()
+				sendContainerDataToApp()
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	wnd.Run(loop)
+	app.Run()
 
 	cancel()
 }
