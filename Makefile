@@ -53,6 +53,14 @@ build/macapp.go:
 	cd $(dir $@) && shasum -a 256 $(notdir $@) > $(notdir $@).sha256
 	@echo "*** Created $@"
 
+.PHONY: %.signed
+%.signed:
+	@echo "*** Signing $*"
+	security find-certificate -c "$(CODE_SIGN_CERT)" -p | openssl x509 -noout -text  -inform pem | grep -E "Validity|(Not (Before|After)\s*:)"
+	codesign --verbose=4 --force --deep --sign "$(CODE_SIGN_CERT)" $*
+	codesign --verbose=4 --display $*
+	@echo "*** Signed $*"
+
 $(DARWIN_AMD64_APP_BUNDLE): build/$(DARWIN_AMD64_EXE_NAME) build/macapp.go
 $(DARWIN_AMD64_APP_BUNDLE).signed: $(DARWIN_AMD64_APP_BUNDLE)
 $(DARWIN_AMD64_DMG): $(DARWIN_AMD64_APP_BUNDLE) $(DARWIN_AMD64_APP_BUNDLE).signed
