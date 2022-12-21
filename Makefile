@@ -1,50 +1,75 @@
 NOW                     := $(shell date -u +'%Y-%m-%d_%TZ')
 HEAD_SHA1               := $(shell git rev-parse HEAD)
-HEAD_TAG                := $(shell git tag --points-at HEAD | grep -e "^v" | sort | tail -1 | cut -b2-)
+HEAD_TAG                := $(shell git describe --tags | grep -e "^v" | sort | tail -1 | cut -b2-)
 MACAPP_GO               := ~/workspace/macapp.go/macapp.go
 CODE_SIGN_CERT          := Manuel Koch Code Sign
 APP_NAME                := Container-HUD
+
 DARWIN_APP_ID           := com.manuel-koch.container-hud
+
 DARWIN_ARM64_EXE_NAME   := container-hud.darwin-arm64
-DARWIN_ARM64_DIST_DIR   := ./dist/darwin_arm64
+DARWIN_ARM64_DIST_DIR   := dist/darwin_arm64
 DARWIN_ARM64_APP_BUNDLE := $(DARWIN_ARM64_DIST_DIR)/$(APP_NAME).app
 DARWIN_ARM64_DMG        := $(DARWIN_ARM64_DIST_DIR)/$(APP_NAME)_darwin-arm64_$(HEAD_TAG).dmg
 
-build_darwin_arm64::
-	env GOOS=darwin GOARCH=arm64 go build \
-		-ldflags "-s -w -X main.versionTag=$(HEAD_TAG) -X main.versionSha1=$(HEAD_SHA1) -X main.buildDate=$(NOW)" \
-		-o build/$(DARWIN_ARM64_EXE_NAME) \
-		.
+DARWIN_AMD64_EXE_NAME   := container-hud.darwin-amd64
+DARWIN_AMD64_DIST_DIR   := dist/darwin_amd64
+DARWIN_AMD64_APP_BUNDLE := $(DARWIN_AMD64_DIST_DIR)/$(APP_NAME).app
+DARWIN_AMD64_DMG        := $(DARWIN_AMD64_DIST_DIR)/$(APP_NAME)_darwin-amd64_$(HEAD_TAG).dmg
 
-build_darwin_arm64_app:: build_darwin_arm64
-	@echo ===========================================================
-	@echo == Cleaning dist artifacts darwin_arm64
-	echo -[ -d $(DARWIN_ARM64_APP_BUNDLE) ] && rm -rf $(DARWIN_ARM64_APP_BUNDLE)
-	echo -[ -f $(DARWIN_ARM64_DMG) ] && rm -rf $(DARWIN_ARM64_DMG)
-	@echo ===========================================================
-	@echo == Building app bundle darwin_arm64
-	go run $(MACAPP_GO) \
-    		-assets ./build \
-    		-bin $(DARWIN_ARM64_EXE_NAME) \
+build/container-hud.%::
+	@echo "*** Building $@"
+	env GOOS=$(firstword $(subst -, ,$*)) GOARCH=$(lastword $(subst -, ,$*)) go build \
+		-ldflags "-s -w -X main.versionTag=$(HEAD_TAG) -X main.versionSha1=$(HEAD_SHA1) -X main.buildDate=$(NOW)" \
+		-o $@ \
+		.
+	@echo "*** Built $@"
+
+build/macapp.go:
+	@echo "*** Fetching $@"
+	curl -o build/macapp.go https://gist.githubusercontent.com/mholt/11008646c95d787c30806d3f24b2c844/raw/0c07883ba937f2d066d125ce3efd731adfd899d7/macapp.go
+	@echo "*** Fetched $@"
+
+%.app:
+	@echo "*** Building $@ from $<"
+	go run build/macapp.go \
+    		-assets $(dir $<) \
+    		-bin $(notdir $<) \
 			-icon ./Icon.png \
 			-identifier $(DARWIN_APP_ID) \
 			-name $(APP_NAME) \
-			-o $(DARWIN_ARM64_DIST_DIR)
-	plutil -replace CFBundleShortVersionString -string $(HEAD_TAG) $(DARWIN_ARM64_APP_BUNDLE)/Contents/Info.plist
-	@echo ===========================================================
-	@echo == Signing app bundle
-	#security find-certificate -c "$(CODE_SIGN_CERT)" -p | openssl x509 -noout -text  -inform pem | grep -E "Validity|(Not (Before|After)\s*:)"
-	#codesign --verbose=4 --force --deep --sign "$(CODE_SIGN_CERT)" $(DARWIN_ARM64_APP_BUNDLE)
-	#codesign --verbose=4 --display $(DARWIN_ARM64_APP_BUNDLE)
-	@echo ===========================================================
-	@echo == Building app disk image
-	create-dmg --volname $(notdir $(DARWIN_ARM64_DMG)) --volicon $(DARWIN_ARM64_APP_BUNDLE)/Contents/Resources/icon.icns \
-             --icon $(notdir $(DARWIN_ARM64_APP_BUNDLE)) 110 150 \
+			-o $(dir $@)
+	plutil -replace CFBundleShortVersionString -string $(HEAD_TAG) $@/Contents/Info.plist
+	@echo "*** Built $@ from $<"
+
+%.dmg:
+	@echo "*** Creating $@"
+	create-dmg --volname $(notdir $@) --volicon $</Contents/Resources/icon.icns \
+             --icon $(notdir $<) 110 150 \
              --app-drop-link 380 150 \
              --background ./dmg_bg.png \
-             $(DARWIN_ARM64_DMG) \
-             $(DARWIN_ARM64_APP_BUNDLE)
-	cd $(dir $(DARWIN_ARM64_DMG)) && shasum -a 256 $(notdir $(DARWIN_ARM64_DMG)) > $(notdir $(DARWIN_ARM64_DMG)).sha256
+             $@ \
+             $<
+	cd $(dir $@) && shasum -a 256 $(notdir $@) > $(notdir $@).sha256
+	@echo "*** Created $@"
+
+$(DARWIN_AMD64_APP_BUNDLE): build/$(DARWIN_AMD64_EXE_NAME) build/macapp.go
+$(DARWIN_AMD64_APP_BUNDLE).signed: $(DARWIN_AMD64_APP_BUNDLE)
+$(DARWIN_AMD64_DMG): $(DARWIN_AMD64_APP_BUNDLE) $(DARWIN_AMD64_APP_BUNDLE).signed
+
+darwin_amd64_dmg: $(DARWIN_AMD64_DMG)
+
+$(DARWIN_ARM64_APP_BUNDLE): build/$(DARWIN_ARM64_EXE_NAME) build/macapp.go
+$(DARWIN_ARM64_APP_BUNDLE).signed: $(DARWIN_ARM64_APP_BUNDLE)
+$(DARWIN_ARM64_DMG): $(DARWIN_ARM64_APP_BUNDLE) $(DARWIN_ARM64_APP_BUNDLE).signed
+
+darwin_arm64_dmg: $(DARWIN_ARM64_DMG)
+
+.PHONY: clean
+clean::
+	-rm -rf build/*
+	-rm -rf dist/*
+	@echo "*** Clean"
 
 bundle::
 	@echo "package main\n" > resources.go
