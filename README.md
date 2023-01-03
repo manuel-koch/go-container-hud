@@ -16,7 +16,7 @@ to create a simple UI
   - stop <img src="./stop.png" width="16" height="16"/> container
 - show basic info like container id or image
 - cpu bar-graph to show current cpu metric
-- hover over cou bar-graph to show history of cpu usage
+- hover over cpu bar-graph to show history of cpu usage
 - memory bar-graph to show current memory metric
 - hover over memory bar-graph to show history of memory usage
 
