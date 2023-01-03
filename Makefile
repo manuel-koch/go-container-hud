@@ -13,12 +13,12 @@ DARWIN_APP_ID           := com.manuel-koch.container-hud
 DARWIN_ARM64_BINARY     := build/darwin-$(DARWIN_OS_VERSION)-arm64/container-hud.darwin-$(DARWIN_OS_VERSION)-arm64
 DARWIN_ARM64_DIST_DIR   := dist/darwin-$(DARWIN_OS_VERSION)-arm64
 DARWIN_ARM64_APP_BUNDLE := $(DARWIN_ARM64_DIST_DIR)/$(APP_NAME).app
-DARWIN_ARM64_DMG        := $(DARWIN_ARM64_DIST_DIR)/$(APP_NAME)_darwin-$(DARWIN_OS_VERSION)-arm64.$(HEAD_TAG).dmg
+DARWIN_ARM64_DMG        := $(DARWIN_ARM64_DIST_DIR)/$(APP_NAME)_v$(HEAD_TAG)_darwin_$(DARWIN_OS_VERSION)_arm64.dmg
 
 DARWIN_AMD64_BINARY     := build/darwin-$(DARWIN_OS_VERSION)-amd64/container-hud.darwin-$(DARWIN_OS_VERSION)-amd64
 DARWIN_AMD64_DIST_DIR   := dist/darwin-$(DARWIN_OS_VERSION)-amd64
 DARWIN_AMD64_APP_BUNDLE := $(DARWIN_AMD64_DIST_DIR)/$(APP_NAME).app
-DARWIN_AMD64_DMG        := $(DARWIN_AMD64_DIST_DIR)/$(APP_NAME)_darwin-$(DARWIN_OS_VERSION)-amd64.$(HEAD_TAG).dmg
+DARWIN_AMD64_DMG        := $(DARWIN_AMD64_DIST_DIR)/$(APP_NAME)_v$(HEAD_TAG)_darwin_$(DARWIN_OS_VERSION)_amd64.dmg
 
 
 container-hud.%:
