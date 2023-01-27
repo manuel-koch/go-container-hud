@@ -46,26 +46,26 @@ var (
 	CpuBarColor   = color.RGBA{G: 255, A: 255}
 )
 
-// buildPlotYTicker returns plot tickers derived from given min, max & interval
-func buildPlotYTicker(min float64, max float64, interval float64, tickerLabel func(float64) string) []giu.PlotTicker {
-	minYAxis := math.Floor(min/interval) * interval
-	maxYAxis := math.Ceil(max/interval) * interval
+// buildPlotTicker returns plot tickers derived from given min, max & interval
+func buildPlotTicker(min float64, max float64, interval float64, tickerLabel func(float64) string) []giu.PlotTicker {
+	minValue := math.Floor(min/interval) * interval
+	maxValue := math.Ceil(max/interval) * interval
 	var ticks []giu.PlotTicker
-	if minYAxis == maxYAxis {
+	if minValue == maxValue {
 		ticks = make([]giu.PlotTicker, 1)
 	} else {
-		ticks = make([]giu.PlotTicker, int((maxYAxis-minYAxis)/interval)+1)
+		ticks = make([]giu.PlotTicker, int((maxValue-minValue)/interval)+1)
 	}
 	for tIdx := range ticks {
-		ticks[tIdx].Position = minYAxis + interval*float64(tIdx)
+		ticks[tIdx].Position = minValue + interval*float64(tIdx)
 		ticks[tIdx].Label = tickerLabel(ticks[tIdx].Position)
 	}
 
 	return ticks
 }
 
-// buildPlotYInterval derives an interval from min to max from available intervals
-func buildPlotYInterval(min, max float64, intervals []float64) float64 {
+// buildPlotInterval derives an interval from min to max from available intervals
+func buildPlotInterval(min, max float64, intervals []float64) float64 {
 	diff := max - min
 	interval := intervals[0]
 	for _, i := range intervals[1:] {
@@ -230,8 +230,6 @@ func (a *App) Render() {
 	defer a.containerDataMutex.Unlock()
 
 	nofContainer := len(a.containerData)
-	minXAxis := float64(time.Now().Add(-RecentDuration).Unix())
-	maxXAxis := float64(time.Now().Unix())
 	totalCpuPercent := float64(0)
 	totalMemory := uint64(0)
 	for _, data := range a.containerData {
@@ -397,6 +395,7 @@ func cpuHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64) g
 		giu.Label(data.AlternativeName),
 		giu.Custom(func() {
 			var (
+				xTicks                 []giu.PlotTicker = nil
 				yTicks                 []giu.PlotTicker = nil
 				yAxisMin                                = 0.
 				yAxisMax                                = 0.
@@ -407,8 +406,12 @@ func cpuHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64) g
 				cpuX, cpuY = data.CpuPercentHistory.GetXY()
 				cpuMin, cpuMax = data.CpuPercentHistory.GetYMinMax(minXAxis, maxXAxis)
 				cpuAvg = data.CpuPercentHistory.GetYAvg(minXAxis, maxXAxis)
-				interval := buildPlotYInterval(cpuMin, cpuMax, CpuIntervals)
-				yTicks = buildPlotYTicker(cpuMin, cpuMax, interval, func(value float64) string {
+				xTicks = buildPlotTicker(minXAxis, maxXAxis, 2*time.Minute.Seconds(), func(value float64) string {
+					h, m, _ := time.Unix(int64(value), 0).Clock()
+					return fmt.Sprintf("%02d:%02d", h, m)
+				})
+				yInterval := buildPlotInterval(cpuMin, cpuMax, CpuIntervals)
+				yTicks = buildPlotTicker(cpuMin, cpuMax, yInterval, func(value float64) string {
 					return fmt.Sprintf("%0.0f %%", value)
 				})
 				yAxisMin = yTicks[0].Position
@@ -428,6 +431,8 @@ func cpuHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64) g
 				giu.ConditionAlways,
 			).Plots(
 				giu.PlotLineXY("CPU", cpuX, cpuY),
+			).XTicks(
+				xTicks, false,
 			).YTicks(
 				yTicks, false, 0,
 			).XAxeFlags(
@@ -442,6 +447,7 @@ func memoryHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64
 		giu.Label(data.AlternativeName),
 		giu.Custom(func() {
 			var (
+				xTicks                 []giu.PlotTicker = nil
 				yTicks                 []giu.PlotTicker = nil
 				yAxisMin                                = 0.
 				yAxisMax                                = 0.
@@ -452,8 +458,12 @@ func memoryHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64
 				memX, memY = data.MemoryHistory.GetXY()
 				memMin, memMax = data.MemoryHistory.GetYMinMax(minXAxis, maxXAxis)
 				memAvg = data.MemoryHistory.GetYAvg(minXAxis, maxXAxis)
-				interval := buildPlotYInterval(memMin, memMax, MemoryIntervals)
-				yTicks = buildPlotYTicker(memMin, memMax, interval, func(value float64) string {
+				xTicks = buildPlotTicker(minXAxis, maxXAxis, 2*time.Minute.Seconds(), func(value float64) string {
+					h, m, _ := time.Unix(int64(value), 0).Clock()
+					return fmt.Sprintf("%02d:%02d", h, m)
+				})
+				yInterval := buildPlotInterval(memMin, memMax, MemoryIntervals)
+				yTicks = buildPlotTicker(memMin, memMax, yInterval, func(value float64) string {
 					return bytesize.New(value).String()
 				})
 				yAxisMin = yTicks[0].Position
@@ -474,6 +484,8 @@ func memoryHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64
 				giu.PlotLineXY("Mem", memX, memY),
 			).XAxeFlags(
 				giu.PlotAxisFlagsTime,
+			).XTicks(
+				xTicks, false,
 			).YTicks(
 				yTicks, false, 0,
 			).Build()
@@ -486,6 +498,7 @@ func networkHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float6
 		giu.Label(data.AlternativeName),
 		giu.Custom(func() {
 			var (
+				xTicks                       []giu.PlotTicker = nil
 				yTicks                       []giu.PlotTicker = nil
 				yAxisMin                                      = 0.
 				yAxisMax                                      = 0.
@@ -503,8 +516,12 @@ func networkHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float6
 				netTxAvg = data.NetworkTxHistory.GetYAvg(minXAxis, maxXAxis)
 				netMin := math.Min(netRxMin, netTxMin)
 				netMax := math.Max(netRxMax, netTxMax)
-				interval := buildPlotYInterval(netMin, netMax, MemoryIntervals)
-				yTicks = buildPlotYTicker(netMin, netMax, interval, func(value float64) string {
+				xTicks = buildPlotTicker(minXAxis, maxXAxis, 2*time.Minute.Seconds(), func(value float64) string {
+					h, m, _ := time.Unix(int64(value), 0).Clock()
+					return fmt.Sprintf("%02d:%02d", h, m)
+				})
+				yInterval := buildPlotInterval(netMin, netMax, MemoryIntervals)
+				yTicks = buildPlotTicker(netMin, netMax, yInterval, func(value float64) string {
 					return bytesize.New(value).String()
 				})
 				yAxisMin = yTicks[0].Position
@@ -522,11 +539,14 @@ func networkHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float6
 				maxXAxis,
 				yAxisMin,
 				yAxisMax,
-				giu.ConditionAlways).Plots(
+				giu.ConditionAlways,
+			).Plots(
 				giu.PlotLineXY("RX", netRxX, netRxY),
 				giu.PlotLineXY("TX", netTxX, netTxY),
 			).XAxeFlags(
 				giu.PlotAxisFlagsTime,
+			).XTicks(
+				xTicks, false,
 			).YTicks(
 				yTicks, false, 0,
 			).Build()
