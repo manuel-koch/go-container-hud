@@ -77,17 +77,18 @@ func buildPlotYInterval(min, max float64, intervals []float64) float64 {
 }
 
 type App struct {
-	containerDataMutex sync.Mutex
-	containerData      []ContainerData
-	containerSortMode  ContainerSortMode
+	containerDataMutex  sync.Mutex
+	containerData       []ContainerData
+	containerSortMode   ContainerSortMode
+	containerIdSelected string
 
 	wnd *giu.MasterWindow
 
 	buildInfo string
 
-	aboutPopup                   *PopupModal
-	copiedToClipboardPopup       *PopupModal
-	copiedToClipBoardDescription string
+	aboutPopup            *PopupModal
+	containerEnvVarsPopup *PopupModal
+	containerEnvVars      map[string]string
 
 	healthyTexture   *giu.Texture
 	unhealthyTexture *giu.Texture
@@ -103,7 +104,9 @@ func NewApp() *App {
 	app := &App{containerSortMode: ContainerSortByName}
 	app.wnd = giu.NewMasterWindow("Container HUD", 600, 600, 0)
 	app.aboutPopup = NewPopupModal("About")
-	app.copiedToClipboardPopup = NewPopupModal("Copied to Clipboard")
+	app.containerIdSelected = ""
+	app.containerEnvVars = make(map[string]string, 0)
+	app.containerEnvVarsPopup = NewPopupModal("Environment Variables")
 	app.buildTextures()
 	return app
 }
@@ -156,6 +159,42 @@ func (a *App) ContainerData(data []ContainerData) {
 	a.containerData = data
 
 	giu.Update()
+}
+
+func (a *App) setContainerSelectedByIdx(idx int) {
+	selectedId := ""
+	if idx >= -1 && idx < len(a.containerData) {
+		selectedId = a.containerData[idx].ID
+	}
+	if selectedId != a.containerIdSelected {
+		a.containerIdSelected = selectedId
+		giu.Update()
+	}
+}
+
+func (a *App) IsContainerSelected() bool {
+	return a.getContainerByIdx(a.containerIdSelected) >= 0
+}
+
+func (a *App) getContainerByIdx(id string) int {
+	for i := range a.containerData {
+		if a.containerData[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (a *App) showContainerEnvVars(containerId string) {
+	idx := a.getContainerByIdx(containerId)
+	if idx >= 0 && idx < len(a.containerData) {
+		app.containerEnvVars = make(map[string]string)
+		for k, v := range a.containerData[idx].EnvVars {
+			app.containerEnvVars[k] = v
+		}
+		app.containerEnvVarsPopup.Open()
+		return
+	}
 }
 
 func (a *App) sortContainerData() {
@@ -223,7 +262,26 @@ func (a *App) Render() {
 		),
 		giu.PrepareMsgbox(),
 
-		app.copiedToClipboardPopup.Layout(giu.Labelf("Copied %s to clipboard", app.copiedToClipBoardDescription)),
+		app.containerEnvVarsPopup.Layout(
+			giu.Label("Click variable to copy it to clipboard..."),
+			giu.Custom(func() {
+				envVarNames := make([]string, 0, len(app.containerEnvVars))
+				for n, _ := range app.containerEnvVars {
+					envVarNames = append(envVarNames, n)
+				}
+				sort.SliceStable(envVarNames, func(i int, j int) bool {
+					return envVarNames[i] < envVarNames[j]
+				})
+				for _, n := range envVarNames {
+					env := fmt.Sprintf("%s=%s", n, app.containerEnvVars[n])
+					giu.Selectable(env).OnClick(
+						func() {
+							fmt.Printf("Copied envvar %s to clipboard\n", n)
+							clipboard.Write(clipboard.FmtText, []byte(env))
+						}).Build()
+				}
+			}),
+		),
 		giu.PrepareMsgbox(),
 
 		giu.MenuBar().Layout(
@@ -233,6 +291,11 @@ func (a *App) Render() {
 				}),
 				giu.MenuItem("Sort containers by creation time").Selected(a.containerSortMode == ContainerSortByCreated).OnClick(func() {
 					a.containerSortMode = ContainerSortByCreated
+				}),
+			),
+			giu.Menu("Container").Enabled(a.IsContainerSelected()).Layout(
+				giu.MenuItem("Show envvars").OnClick(func() {
+					a.showContainerEnvVars(a.containerIdSelected)
 				}),
 			),
 			giu.Menu("Help").Layout(
@@ -258,63 +321,60 @@ func (a *App) Render() {
 				giu.Label("No containers are running"),
 			},
 		),
-		GridBuilder[ContainerData]("containers", bestColumns, bestRows, a.containerData, func(_ int, data ContainerData) giu.Widget {
-			return giu.Layout([]giu.Widget{
-				giu.Style().SetFontSize(12).To(
-					giu.Style().SetColor(
-						giu.StyleColorText,
-						LabelColor,
-					).SetColor(
-						giu.StyleColorBorder, color.Transparent,
-					).To(
-						conditionalTexture(data.HealthStatus == UnknownHealth, a.unknownTexture, "Unknown container health status"),
-						conditionalTexture(data.HealthStatus == Unhealthy, a.unhealthyTexture, "Container is unhealthy"),
-						conditionalTexture(data.HealthStatus == Healthy, a.healthyTexture, "Container is healthy"),
-						giu.Custom(func() { giu.SameLine() }),
-						conditionalButton(data.State == ContainerRunning, a.restartTexture, "Restart container", func() {
-							go a.restartContainer(data.ID)
-						}),
-						giu.Custom(func() { giu.SameLine() }),
-						conditionalButton(data.State == ContainerRunning, a.stopTexture, "Stop container", func() {
-							go a.stopContainer(data.ID)
-						}),
-						giu.Dummy(0, 0),
-						ShortLabel(data.AlternativeName),
-						giu.Tooltip("Details").Layout(
-							giu.Label(fmt.Sprintf("Uptime %s", time.Since(time.Unix(data.Created, 0)).Round(time.Second))),
-							giu.Label(fmt.Sprintf("Image  %s", data.Image)),
-						),
-					),
-					ShortLabel(fmt.Sprintf("ID %s", data.ID[:12])),
-					giu.ContextMenu().Layout(
-						giu.Selectable("Copy to clipboard").OnClick(func() {
-							fmt.Printf("Copied ID %s to clipboard\n", data.ID[:12])
-							clipboard.Write(clipboard.FmtText, []byte(data.ID[:12]))
-							app.copiedToClipBoardDescription = "container id"
-							app.copiedToClipboardPopup.Open()
-						}),
-					),
-					Bar().Label(
-						fmt.Sprintf("CPU  %0.1f%%, %d PIDs", data.CpuPercent, data.PIDs),
-					).Min(0).Value(data.CpuPercent).Max(CpuMaxPercent).Height(16).Foreground(CpuBarColor),
-					cpuHistoryTooltip(data, minXAxis, maxXAxis),
-					Bar().Label(
-						fmt.Sprintf("Mem  %0.1f%% = %s", data.MemoryPercent, bytesize.New(float64(data.Memory))),
-					).Min(0).Value(float64(data.Memory)).Max(float64(data.MemoryLimit)).Height(16).Foreground(MemBarColor),
-					memoryHistoryTooltip(data, minXAxis, maxXAxis),
-					giu.Label(fmt.Sprintf("Network RX %s\n        TX %s", bytesize.New(float64(data.NetworkRx)), bytesize.New(float64(data.NetworkTx)))),
-					networkHistoryTooltip(data, minXAxis, maxXAxis),
-				),
-			})
-		}),
+		GridBuilder[ContainerData]("containers", bestColumns, bestRows, a.containerData, a.getContainerByIdx(a.containerIdSelected),
+			a.setContainerSelectedByIdx,
+			func(_ int, selected bool, data ContainerData) giu.Widget {
+				return a.renderContainerData(selected, data)
+			}),
 	)
+}
+
+func (a *App) renderContainerData(selected bool, data ContainerData) giu.Widget {
+	minXAxis := float64(time.Now().Add(-RecentDuration).Unix())
+	maxXAxis := float64(time.Now().Unix())
+	return giu.Layout([]giu.Widget{
+		conditionalTexture(data.HealthStatus == UnknownHealth, a.unknownTexture, "Unknown container health status"),
+		conditionalTexture(data.HealthStatus == Unhealthy, a.unhealthyTexture, "Container is unhealthy"),
+		conditionalTexture(data.HealthStatus == Healthy, a.healthyTexture, "Container is healthy"),
+		giu.Custom(func() { giu.SameLine() }),
+		conditionalButton(data.State == ContainerRunning, a.restartTexture, "Restart container", func() {
+			go a.restartContainer(data.ID)
+		}),
+		giu.Custom(func() { giu.SameLine() }),
+		conditionalButton(data.State == ContainerRunning, a.stopTexture, "Stop container", func() {
+			go a.stopContainer(data.ID)
+		}),
+		giu.Dummy(0, 0),
+		ShortLabel(data.AlternativeName),
+		giu.ContextMenu().Layout(
+			giu.Label(fmt.Sprintf("Uptime %s", time.Since(time.Unix(data.Created, 0)).Round(time.Second))),
+			giu.Label(fmt.Sprintf("Image  %s", data.Image)),
+		),
+		ShortLabel(fmt.Sprintf("ID %s", data.ID[:12])),
+		giu.ContextMenu().Layout(
+			giu.Selectable("Copy to clipboard").OnClick(func() {
+				fmt.Printf("Copied ID %s to clipboard\n", data.ID[:12])
+				clipboard.Write(clipboard.FmtText, []byte(data.ID[:12]))
+			}),
+		),
+		Bar().Label(
+			fmt.Sprintf("CPU  %0.1f%%, %d PIDs", data.CpuPercent, data.PIDs),
+		).Min(0).Value(data.CpuPercent).Max(CpuMaxPercent).Height(16).Foreground(CpuBarColor),
+		cpuHistoryTooltip(data, minXAxis, maxXAxis),
+		Bar().Label(
+			fmt.Sprintf("Mem  %0.1f%% = %s", data.MemoryPercent, bytesize.New(float64(data.Memory))),
+		).Min(0).Value(float64(data.Memory)).Max(float64(data.MemoryLimit)).Height(16).Foreground(MemBarColor),
+		memoryHistoryTooltip(data, minXAxis, maxXAxis),
+		giu.Label(fmt.Sprintf("Network RX %s\n        TX %s", bytesize.New(float64(data.NetworkRx)), bytesize.New(float64(data.NetworkTx)))),
+		networkHistoryTooltip(data, minXAxis, maxXAxis),
+	})
 }
 
 func conditionalTexture(show bool, texture *giu.Texture, tooltip string) giu.Widget {
 	return giu.Condition(
 		show,
 		giu.Layout{
-			giu.Image(texture).Size(IconSize, IconSize),
+			giu.Image(texture).BorderCol(color.Transparent).Size(IconSize, IconSize),
 			giu.Tooltip(tooltip),
 		},
 		nil,

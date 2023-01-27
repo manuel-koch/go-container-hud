@@ -35,6 +35,7 @@ type ContainerData struct {
 	DockerComposeProjectDir      string
 	DockerComposeService         string
 	DockerComposeContainerNumber int
+	EnvVars                      map[string]string
 
 	LastUpdated       int64
 	CpuPercent        float64
@@ -78,6 +79,7 @@ func NewContainerData(id string) ContainerData {
 		State:             ContainerUnknownState,
 		CpuPercentHistory: NewHistory(),
 		MemoryHistory:     NewHistory(),
+		EnvVars:           make(map[string]string, 0),
 	}
 }
 
@@ -180,6 +182,9 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 
 			container.mutex.Lock()
 
+			firstSeen := container.Data.LastUpdated == 0
+			healthStatusTooOld := time.Since(time.Unix(container.Data.HealthUpdated, 0)) > time.Duration(5)
+
 			container.Data.LastUpdated = v.Stats.Read.Unix()
 			container.Data.CpuPercent = cpuPercent
 			container.Data.CpuPercentHistory.Add(Sample{float64(container.Data.LastUpdated), cpuPercent})
@@ -195,8 +200,15 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 			container.Data.BlockWrite = blkWrite
 			container.Data.PIDs = pidsStatsCurrent
 
-			if time.Since(time.Unix(container.Data.HealthUpdated, 0)) > time.Duration(5) {
+			if firstSeen || healthStatusTooOld {
 				if inspect, err := cli.ContainerInspect(ctx, container.Data.ID); err == nil {
+					if firstSeen {
+						for _, env := range inspect.Config.Env {
+							if s := strings.SplitN(env, "=", 2); len(s) == 2 {
+								container.Data.EnvVars[s[0]] = s[1]
+							}
+						}
+					}
 					container.Data.HealthUpdated = container.Data.LastUpdated
 					if inspect.State != nil && inspect.State.Health != nil {
 						switch inspect.State.Health.Status {

@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/AllenDang/giu"
 	"github.com/AllenDang/imgui-go"
+	"image"
+	"image/color"
 )
 
 type GridState struct {
@@ -15,9 +17,9 @@ func (s *GridState) Dispose() {
 }
 
 // GridBuilder Arrange widgets from given array of Samples in a grid layout where all grid items share equal size
-func GridBuilder[T any](id string, columns int, rows int, values []T, builder func(i int, item T) giu.Widget) giu.Layout {
+// The selected item will be highlighted by a border.
+func GridBuilder[T any](id string, columns int, rows int, values []T, selected int, onClicked func(i int), builder func(i int, selected bool, item T) giu.Widget) giu.Layout {
 	var layout giu.Layout
-	var foo = 1
 
 	layout = append(layout, giu.Custom(func() {
 		imgui.PushID(id)
@@ -47,7 +49,6 @@ func GridBuilder[T any](id string, columns int, rows int, values []T, builder fu
 			}
 			valueRef := v
 			layout = append(layout, giu.Custom(func() {
-				_ = foo
 				_ = itemIdx
 				_ = itemColumns
 				if itemIdx%itemColumns > 0 {
@@ -55,9 +56,32 @@ func GridBuilder[T any](id string, columns int, rows int, values []T, builder fu
 				}
 				if s := giu.Context.GetState(id); s != nil {
 					state := s.(*GridState)
-					giu.Child().Border(false).Size(state.itemWidth, state.itemHeight).Layout(
-						builder(i, valueRef),
+					isSelected := itemIdx == selected
+					giu.Child().Border(true).Size(state.itemWidth, state.itemHeight).Flags(giu.WindowFlagsNoScrollbar|giu.WindowFlagsNoScrollWithMouse).Layout(
+						giu.Custom(func() {
+							if !isSelected {
+								return
+							}
+							style := imgui.CurrentStyle()
+							availWidth, availHeight := giu.GetAvailableRegion()
+							canvas := giu.GetCanvas()
+							topLeftPos := giu.GetCursorScreenPos().Sub(image.Pt(int(style.FramePadding().X), int(2*style.FramePadding().Y)))
+							canvas.AddRect(
+								topLeftPos,
+								topLeftPos.Add(image.Pt(int(availWidth+2*style.FramePadding().X), int(availHeight+4*style.FramePadding().Y))),
+								color.RGBA{R: 255, G: 255, B: 255, A: 255},
+								6.,
+								giu.DrawFlagsRoundCornersAll,
+								2.,
+							)
+						}),
+						builder(itemIdx, isSelected, valueRef),
 					).Build()
+					giu.Event().OnClick(giu.MouseButtonLeft, func() {
+						if onClicked != nil {
+							onClicked(itemIdx)
+						}
+					}).Build()
 				}
 			}))
 		}
