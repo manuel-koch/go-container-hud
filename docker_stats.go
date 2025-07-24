@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/docker/docker/api/types"
+	types_container "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"io"
 	"math"
@@ -37,22 +37,24 @@ type ContainerData struct {
 	DockerComposeContainerNumber int
 	EnvVars                      map[string]string
 
-	LastUpdated       int64
-	CpuPercent        float64
-	CpuPercentHistory History
-	Memory            uint64
-	MemoryLimit       uint64
-	MemoryPercent     float64
-	MemoryHistory     History
-	NetworkTx         uint64
-	NetworkTxHistory  History
-	NetworkRx         uint64
-	NetworkRxHistory  History
-	BlockRead         uint64
-	BlockWrite        uint64
-	PIDs              uint64
-	HealthUpdated     int64
-	HealthStatus      HealthState
+	LastUpdated                int64
+	CpuPercent                 float64
+	CpuPercentHistory          History
+	CpuThrottledPercent        float64
+	CpuThrottledPercentHistory History
+	Memory                     uint64
+	MemoryLimit                uint64
+	MemoryPercent              float64
+	MemoryHistory              History
+	NetworkTx                  uint64
+	NetworkTxHistory           History
+	NetworkRx                  uint64
+	NetworkRxHistory           History
+	BlockRead                  uint64
+	BlockWrite                 uint64
+	PIDs                       uint64
+	HealthUpdated              int64
+	HealthStatus               HealthState
 }
 
 type ContainerState int
@@ -116,9 +118,7 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 	}
 
 	var (
-		previousCPU    uint64
-		previousSystem uint64
-		errors         = make(chan error, 1)
+		errors = make(chan error, 1)
 	)
 
 	dec := json.NewDecoder(response.Body)
@@ -132,13 +132,14 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 		}(response.Body)
 		for {
 			var (
-				v                 *types.StatsJSON
-				memPercent        = 0.0
-				cpuPercent        float64
-				blkRead, blkWrite uint64 // Only used on Linux
-				mem               float64
-				memLimit          = 0.0
-				pidsStatsCurrent  uint64
+				stats               *types_container.StatsResponse
+				memPercent          = 0.0
+				cpuPercent          float64
+				cpuThrottledPercent = 0.0  // Only used on Linux
+				blkRead, blkWrite   uint64 // Only used on Linux
+				mem                 float64
+				memLimit            = 0.0
+				pidsStatsCurrent    uint64
 			)
 
 			select {
@@ -148,7 +149,7 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 				//
 			}
 
-			if err := dec.Decode(&v); err != nil {
+			if err := dec.Decode(&stats); err != nil {
 				dec = json.NewDecoder(io.MultiReader(dec.Buffered(), response.Body))
 				errors <- err
 				if err == io.EOF {
@@ -163,21 +164,20 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 			if daemonOSType != "windows" {
 				// MemoryStats.Limit will never be 0 unless the container is not running and we haven't
 				// got any Samples from cgroup
-				if v.MemoryStats.Limit != 0 {
-					memPercent = float64(v.MemoryStats.Usage) / float64(v.MemoryStats.Limit) * 100.0
+				if stats.MemoryStats.Limit != 0 {
+					memPercent = float64(stats.MemoryStats.Usage) / float64(stats.MemoryStats.Limit) * 100.0
 				}
-				previousCPU = v.PreCPUStats.CPUUsage.TotalUsage
-				previousSystem = v.PreCPUStats.SystemUsage
-				cpuPercent = calculateCPUPercentUnix(previousCPU, previousSystem, v)
-				blkRead, blkWrite = calculateBlockIO(v.BlkioStats)
-				mem = float64(v.MemoryStats.Usage)
-				memLimit = float64(v.MemoryStats.Limit)
-				pidsStatsCurrent = v.PidsStats.Current
+				cpuPercent = calculateCPUPercentUnix(stats)
+				cpuThrottledPercent = calculateCPUThrottledPercentUnix(stats)
+				blkRead, blkWrite = calculateBlockIO(stats.BlkioStats)
+				mem = float64(stats.MemoryStats.Usage)
+				memLimit = float64(stats.MemoryStats.Limit)
+				pidsStatsCurrent = stats.PidsStats.Current
 			} else {
-				cpuPercent = calculateCPUPercentWindows(v)
-				blkRead = v.StorageStats.ReadSizeBytes
-				blkWrite = v.StorageStats.WriteSizeBytes
-				mem = float64(v.MemoryStats.PrivateWorkingSet)
+				cpuPercent = calculateCPUPercentWindows(stats)
+				blkRead = stats.StorageStats.ReadSizeBytes
+				blkWrite = stats.StorageStats.WriteSizeBytes
+				mem = float64(stats.MemoryStats.PrivateWorkingSet)
 			}
 
 			container.mutex.Lock()
@@ -185,15 +185,17 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 			firstSeen := container.Data.LastUpdated == 0
 			healthStatusTooOld := time.Since(time.Unix(container.Data.HealthUpdated, 0)) > time.Duration(5)
 
-			container.Data.LastUpdated = v.Stats.Read.Unix()
+			container.Data.LastUpdated = stats.Read.Unix()
 			container.Data.CpuPercent = cpuPercent
 			container.Data.CpuPercentHistory.Add(Sample{float64(container.Data.LastUpdated), cpuPercent})
+			container.Data.CpuThrottledPercent = cpuThrottledPercent
+			container.Data.CpuThrottledPercentHistory.Add(Sample{float64(container.Data.LastUpdated), cpuThrottledPercent})
 			container.Data.Memory = uint64(mem)
 			container.Data.MemoryPercent = memPercent
 			container.Data.MemoryLimit = uint64(memLimit)
 			container.Data.MemoryHistory.Add(Sample{float64(container.Data.LastUpdated), mem})
 			prevNetworkRx, prevNetworkTx := container.Data.NetworkRx, container.Data.NetworkTx
-			container.Data.NetworkRx, container.Data.NetworkTx = calculateNetwork(v.Networks)
+			container.Data.NetworkRx, container.Data.NetworkTx = calculateNetwork(stats.Networks)
 			container.Data.NetworkRxHistory.Add(Sample{float64(container.Data.LastUpdated), float64(container.Data.NetworkRx - prevNetworkRx)})
 			container.Data.NetworkTxHistory.Add(Sample{float64(container.Data.LastUpdated), float64(container.Data.NetworkTx - prevNetworkTx)})
 			container.Data.BlockRead = blkRead
@@ -229,7 +231,7 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 			stopped := false
 			if container.Data.State == ContainerRunning && container.Data.PIDs == 0 {
 				// double check that container is still running
-				if containers, err := cli.ContainerList(ctx_, types.ContainerListOptions{}); err == nil {
+				if containers, err := cli.ContainerList(ctx_, types_container.ListOptions{}); err == nil {
 					found := false
 					for _, c := range containers {
 						if c.ID == container.Data.ID {
@@ -272,39 +274,54 @@ func updateContainerStats(ctx context.Context, cli *client.Client, container *Co
 	}
 }
 
-func calculateCPUPercentUnix(previousCPU, previousSystem uint64, v *types.StatsJSON) float64 {
+func calculateCPUPercentUnix(stats *types_container.StatsResponse) float64 {
 	var (
 		cpuPercent = 0.0
 		// calculate the change for the cpu usage of the container in between readings
-		cpuDelta = float64(v.CPUStats.CPUUsage.TotalUsage) - float64(previousCPU)
+		cpuDelta = float64(stats.CPUStats.CPUUsage.TotalUsage) - float64(stats.PreCPUStats.CPUUsage.TotalUsage)
 		// calculate the change for the entire system between readings
-		systemDelta = float64(v.CPUStats.SystemUsage) - float64(previousSystem)
+		systemDelta = float64(stats.CPUStats.SystemUsage) - float64(stats.PreCPUStats.SystemUsage)
 	)
 
 	if systemDelta > 0.0 && cpuDelta > 0.0 {
-		nofCpu := math.Max(float64(len(v.CPUStats.CPUUsage.PercpuUsage)), float64(v.CPUStats.OnlineCPUs))
+		nofCpu := math.Max(float64(len(stats.CPUStats.CPUUsage.PercpuUsage)), float64(stats.CPUStats.OnlineCPUs))
 		cpuPercent = (cpuDelta / systemDelta) * nofCpu * 100.0
 	}
 	return cpuPercent
 }
 
-func calculateCPUPercentWindows(v *types.StatsJSON) float64 {
+func calculateCPUThrottledPercentUnix(stats *types_container.StatsResponse) float64 {
+	var (
+		cpuThrottledPercent = 0.0
+		// calculate the change for the total periods of the container in between readings
+		periodsDelta = float64(stats.CPUStats.ThrottlingData.Periods) - float64(stats.PreCPUStats.ThrottlingData.Periods)
+		// calculate the change of throttled periods of the container between readings
+		throttledPeriodsDelta = float64(stats.CPUStats.ThrottlingData.ThrottledPeriods) - float64(stats.PreCPUStats.ThrottlingData.ThrottledPeriods)
+	)
+
+	if periodsDelta > 0.0 && throttledPeriodsDelta > 0.0 {
+		cpuThrottledPercent = math.Max(0., math.Min(100., throttledPeriodsDelta/periodsDelta*100))
+	}
+	return cpuThrottledPercent
+}
+
+func calculateCPUPercentWindows(stats *types_container.StatsResponse) float64 {
 	// Max number of 100ns intervals between the previous time read and now
-	possIntervals := uint64(v.Read.Sub(v.PreRead).Nanoseconds()) // Start with number of ns intervals
-	possIntervals /= 100                                         // Convert to number of 100ns intervals
-	possIntervals *= uint64(v.NumProcs)                          // Multiply by the number of processors
+	possIntervals := uint64(stats.Read.Sub(stats.PreRead).Nanoseconds()) // Start with number of ns intervals
+	possIntervals /= 100                                                 // Convert to number of 100ns intervals
+	possIntervals *= uint64(stats.NumProcs)                              // Multiply by the number of processors
 
 	// Intervals used
-	intervalsUsed := v.CPUStats.CPUUsage.TotalUsage - v.PreCPUStats.CPUUsage.TotalUsage
+	intervalsUsed := stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage
 
 	// Percentage avoiding divide-by-zero
 	if possIntervals > 0 {
 		return float64(intervalsUsed) / float64(possIntervals) * 100.0
 	}
-	return 0.00
+	return 0.0
 }
 
-func calculateBlockIO(blkio types.BlkioStats) (blkRead uint64, blkWrite uint64) {
+func calculateBlockIO(blkio types_container.BlkioStats) (blkRead uint64, blkWrite uint64) {
 	for _, bioEntry := range blkio.IoServiceBytesRecursive {
 		switch strings.ToLower(bioEntry.Op) {
 		case "read":
@@ -316,7 +333,7 @@ func calculateBlockIO(blkio types.BlkioStats) (blkRead uint64, blkWrite uint64) 
 	return
 }
 
-func calculateNetwork(network map[string]types.NetworkStats) (uint64, uint64) {
+func calculateNetwork(network map[string]types_container.NetworkStats) (uint64, uint64) {
 	var rx, tx uint64
 
 	for _, v := range network {

@@ -115,8 +115,13 @@ func (w *BarWidget) Build() {
 		)
 	}
 
+	// calc height of text to center it vertically in the bar
 	_, valueHeight := giu.CalcTextSize(w.label)
+
+	// clip the text rendering at bounds of bar
+	giu.PushClipRect(topLeftPos, topLeftPos.Add(image.Pt(int(width), int(height))), false)
 	canvas.AddText(topLeftPos.Add(image.Pt(0, int(valueHeight/4))), color.White, w.label)
+	giu.PopClipRect()
 
 	giu.Dummy(width, height).Build()
 }

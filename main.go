@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/docker/docker/api/types"
+	types_container "github.com/docker/docker/api/types/container"
+	types_event "github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/client"
 	"golang.design/x/clipboard"
 	"strconv"
@@ -34,15 +35,14 @@ func getDockerStats(ctx context.Context) chan bool {
 		defer close(done)
 	}
 
-	// handle container info send thru channel to start following container stats
+	// handle container info is sent through the channel and we will start following container stats
 	newContainerIds := make(chan string, 1)
 	go func() {
 		for id := range newContainerIds {
 			// local copy of newContainer struct
 			if _, ok := containerInfo[id]; !ok {
 				containerInfoMutex.Lock()
-				containerInfo[id] = NewContainerInfo(id)
-				info := containerInfo[id]
+				info := NewContainerInfo(id)
 				if inspect, err := cli.ContainerInspect(ctx, id); err == nil {
 					compose_project_dir := inspect.Config.Labels["com.docker.compose.project.working_dir"]
 					container_number := 1
@@ -63,20 +63,21 @@ func getDockerStats(ctx context.Context) chan bool {
 				} else {
 					fmt.Printf("Failed to inspect container %s: %v", info.Data.ID, err)
 				}
+
 				statsCtx, statsCancel := context.WithCancel(context.Background())
-				containerInfo[id].OnStopped = func() {
+				info.OnStopped = func() {
 					statsCancel()
 					containerInfoMutex.Lock()
 					defer containerInfoMutex.Unlock()
 					delete(containerInfo, info.Data.ID)
 				}
-				containerInfo[id].Stop = func() {
+				info.Stop = func() {
 					info.mutex.Lock()
 					if info.Data.State == ContainerRunning {
 						info.Data.State = ContainerStopping
 						info.mutex.Unlock()
 						fmt.Printf("Stopping container %s (%s)...\n", info.Data.AlternativeName, info.Data.ID)
-						err := cli.ContainerStop(ctx, info.Data.ID, nil)
+						err := cli.ContainerStop(ctx, info.Data.ID, types_container.StopOptions{})
 						if err != nil {
 							fmt.Printf("Failed to stop container %s (%s): %v", info.Data.AlternativeName, info.Data.ID, err)
 						}
@@ -84,19 +85,20 @@ func getDockerStats(ctx context.Context) chan bool {
 						info.mutex.Unlock()
 					}
 				}
-				containerInfo[id].Restart = func() {
+				info.Restart = func() {
 					info.mutex.Lock()
 					defer info.mutex.Unlock()
 					if info.Data.State == ContainerRunning {
 						info.Data.State = ContainerRestarting
 						fmt.Printf("Restarting container %s (%s)...\n", info.Data.AlternativeName, info.Data.ID)
-						err := cli.ContainerRestart(ctx, info.Data.ID, nil)
+						err := cli.ContainerRestart(ctx, info.Data.ID, types_container.StopOptions{})
 						if err != nil {
 							fmt.Printf("Failed to restart container %s (%s): %v", info.Data.AlternativeName, info.Data.ID, err)
 						}
 					}
 				}
 				fmt.Printf("Following container: %s (%s)\n", info.Data.AlternativeName, info.Data.ID)
+				containerInfo[id] = info
 				go updateContainerStats(statsCtx, cli, info)
 				containerInfoMutex.Unlock()
 
@@ -119,8 +121,7 @@ func getDockerStats(ctx context.Context) chan bool {
 	}()
 
 	// listen to docker events related to starting & stopping containers
-	eventOptions := types.EventsOptions{}
-	events, _ := cli.Events(ctx, eventOptions)
+	events, _ := cli.Events(ctx, types_event.ListOptions{})
 	go func() {
 		for event := range events {
 			fmt.Printf("Container Event: %s %s %s\n", event.Type, event.Status, event.Action)
@@ -143,8 +144,7 @@ func getDockerStats(ctx context.Context) chan bool {
 	}()
 
 	// get currently running containers too
-	listOptions := types.ContainerListOptions{}
-	containers, err := cli.ContainerList(ctx, listOptions)
+	containers, err := cli.ContainerList(ctx, types_container.ListOptions{})
 	if err != nil {
 		fmt.Printf("Failed to get running containers: %v\n", err)
 		close(done)

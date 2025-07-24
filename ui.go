@@ -41,9 +41,10 @@ var (
 	MemoryIntervals = []float64{64 * KByte, 128 * KByte, 256 * KByte, MByte, 4 * MByte, 8 * MByte, 16 * MByte, 64 * MByte, 256 * MByte, 1 * GByte}
 	MemBarColor     = color.RGBA{B: 255, A: 255}
 
-	CpuMaxPercent = float64(runtime.NumCPU() * 100)
-	CpuIntervals  = []float64{1, 5, 10, 25, 50, 100, 200}
-	CpuBarColor   = color.RGBA{G: 255, A: 255}
+	CpuMaxPercent        = float64(runtime.NumCPU() * 100)
+	CpuIntervals         = []float64{1, 5, 10, 25, 50, 100, 200}
+	CpuBarColor          = color.RGBA{G: 255, A: 255}
+	CpuThrottledBarColor = color.RGBA{R: 255, G: 160, A: 255}
 )
 
 // buildPlotTicker returns plot tickers derived from given min, max & interval
@@ -355,9 +356,14 @@ func (a *App) renderContainerData(selected bool, data ContainerData) giu.Widget 
 				clipboard.Write(clipboard.FmtText, []byte(data.ID[:12]))
 			}),
 		),
-		Bar().Label(
-			fmt.Sprintf("CPU  %0.1f%%, %d PIDs", data.CpuPercent, data.PIDs),
-		).Min(0).Value(data.CpuPercent).Max(CpuMaxPercent).Height(16).Foreground(CpuBarColor),
+		giu.Column(
+			Bar().Label(
+				fmt.Sprintf("CPU  %0.1f%%, %d PIDs", data.CpuPercent, data.PIDs),
+			).Min(0).Value(data.CpuPercent).Max(CpuMaxPercent).Height(16).Foreground(CpuBarColor),
+			Bar().Label(
+				fmt.Sprintf("     %0.1f%% throttled", data.CpuThrottledPercent),
+			).Min(0).Value(data.CpuThrottledPercent).Max(100).Height(16).Foreground(CpuThrottledBarColor),
+		),
 		cpuHistoryTooltip(data, minXAxis, maxXAxis),
 		Bar().Label(
 			fmt.Sprintf("Mem  %0.1f%% = %s", data.MemoryPercent, bytesize.New(float64(data.Memory))),
@@ -395,34 +401,40 @@ func cpuHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64) g
 		giu.Label(data.AlternativeName),
 		giu.Custom(func() {
 			var (
-				xTicks                 []giu.PlotTicker = nil
-				yTicks                 []giu.PlotTicker = nil
-				yAxisMin                                = 0.
-				yAxisMax                                = 0.
-				cpuX, cpuY                              = make([]float64, 0), make([]float64, 0)
-				cpuMin, cpuMax, cpuAvg float64
+				xTicks                                            []giu.PlotTicker = nil
+				yTicks                                            []giu.PlotTicker = nil
+				yAxisMin                                                           = 0.
+				yAxisMax                                                           = 0.
+				cpuX, cpuY                                                         = make([]float64, 0), make([]float64, 0)
+				cpuThrottledX, cpuThrottledY                                       = make([]float64, 0), make([]float64, 0)
+				cpuMin, cpuMax, cpuAvg                            float64
+				cpuThrottledMin, cpuThrottledMax, cpuThrottledAvg float64
+				totalMin, totalMax                                float64
 			)
 			if len(data.CpuPercentHistory.Samples) > 0 {
 				cpuX, cpuY = data.CpuPercentHistory.GetXY()
 				cpuMin, cpuMax = data.CpuPercentHistory.GetYMinMax(minXAxis, maxXAxis)
 				cpuAvg = data.CpuPercentHistory.GetYAvg(minXAxis, maxXAxis)
+				cpuThrottledX, cpuThrottledY = data.CpuThrottledPercentHistory.GetXY()
+				cpuThrottledMin, cpuThrottledMax = data.CpuThrottledPercentHistory.GetYMinMax(minXAxis, maxXAxis)
+				cpuThrottledAvg = data.CpuThrottledPercentHistory.GetYAvg(minXAxis, maxXAxis)
+				totalMin = math.Min(cpuMin, cpuThrottledMin)
+				totalMax = math.Max(cpuMax, cpuThrottledMax)
 				xTicks = buildPlotTicker(minXAxis, maxXAxis, 2*time.Minute.Seconds(), func(value float64) string {
 					h, m, _ := time.Unix(int64(value), 0).Clock()
 					return fmt.Sprintf("%02d:%02d", h, m)
 				})
-				yInterval := buildPlotInterval(cpuMin, cpuMax, CpuIntervals)
-				yTicks = buildPlotTicker(cpuMin, cpuMax, yInterval, func(value float64) string {
+				yInterval := buildPlotInterval(totalMin, totalMax, CpuIntervals)
+				yTicks = buildPlotTicker(totalMin, totalMax, yInterval, func(value float64) string {
 					return fmt.Sprintf("%0.0f %%", value)
 				})
 				yAxisMin = yTicks[0].Position
 				yAxisMax = yTicks[len(yTicks)-1].Position
 			}
 			giu.Plot(
-				fmt.Sprintf("CPU: avg %0.1f%%, max %0.1f%%", cpuAvg, cpuMax),
+				fmt.Sprintf("CPU: avg %0.1f%%, max %0.1f%%,\navg throttled %0.1f%%", cpuAvg, cpuMax, cpuThrottledAvg),
 			).Size(
 				TooltipWidth, TooltipHeight,
-			).Flags(
-				giu.PlotFlagsNoLegend,
 			).AxisLimits(
 				minXAxis,
 				maxXAxis,
@@ -431,6 +443,7 @@ func cpuHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64) g
 				giu.ConditionAlways,
 			).Plots(
 				giu.PlotLineXY("CPU", cpuX, cpuY),
+				giu.PlotLineXY("Throttled", cpuThrottledX, cpuThrottledY),
 			).XTicks(
 				xTicks, false,
 			).YTicks(
@@ -470,7 +483,7 @@ func memoryHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64
 				yAxisMax = yTicks[len(yTicks)-1].Position
 			}
 			giu.Plot(
-				fmt.Sprintf("Mem: avg %s, max %s", bytesize.New(memAvg).String(), bytesize.New(memMax).String()),
+				fmt.Sprintf("Mem: avg %s\n     max %s", bytesize.New(memAvg).String(), bytesize.New(memMax).String()),
 			).Size(
 				TooltipWidth, TooltipHeight,
 			).Flags(
@@ -480,7 +493,8 @@ func memoryHistoryTooltip(data ContainerData, minXAxis float64, maxXAxis float64
 				maxXAxis,
 				yAxisMin,
 				yAxisMax,
-				giu.ConditionAlways).Plots(
+				giu.ConditionAlways,
+			).Plots(
 				giu.PlotLineXY("Mem", memX, memY),
 			).XAxeFlags(
 				giu.PlotAxisFlagsTime,
