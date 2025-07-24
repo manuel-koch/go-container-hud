@@ -95,3 +95,6 @@ bundle::
 	fyne bundle --append --output resources.go --name restartIconData restart.png
 	fyne bundle --append --output resources.go --name stopIconData stop.png
 	@echo "You MUST edit resource.go !"
+
+list-outdated::
+	go list -m -u all
